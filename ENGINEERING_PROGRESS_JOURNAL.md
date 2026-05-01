@@ -1,73 +1,66 @@
-# Engineering progress
+# Engineering Progress Journal
 
-This file is the **handoff log** for Shrike: what ships today, what is queued, and brief notes per work session so anyone (including future you) can land quickly.
+This is a simple running log of what happened from start to now, and what is still left.
 
 ---
 
-## Product snapshot
+## Project in one line
 
-Shrike demonstrates **CCTV-style incident triage** in a controlled drill:
+Shrike is a CCTV-style incident triage demo with two screens (command + guard), backed by Supabase, with simulation today and Roboflow planned next.
 
-- One session at a time with a **command** surface and a **guard** surface.
-- **Simulation** drives “violence detected” vs “no incident” until Roboflow fully owns the decision path.
-- **Supabase** holds session rows and append-only-style **events** (including Vapi transcript hooks).
-- **Vapi** powers the optional live voice line on the guard page.
+---
 
-Scope stays narrow: **likely inmate-on-inmate violence** as a single detection target, not broad anomaly detection.
+## Session timeline (start to now)
+
+### Session 1 — Documentation baseline
+
+- Set up the first README and journal notes.
+- Captured the V1 architecture and basic product flow.
+- Goal at that time: get everyone aligned on what we are building.
+
+### Session 2 — Baseline app + Supabase + simulation flow
+
+- Built the runnable app flow in Next.js (create session, open dashboard/guard paths).
+- Added Supabase schema and core APIs for sessions, events, and transcript hooks.
+- Added simulation endpoint for incident/no-incident drills.
+- Added Vapi voice support on the guard side.
+
+### Session 3 — UI polish milestone completed
+
+- Fully polished dashboard and guard UI for the current milestone.
+- Final UI direction is inspired by Palantir-style clarity: cleaner layout, tighter hierarchy, and more operator-friendly flow.
+- Declared UI polish complete so engineering can focus on backend/data path completion.
+
+### Session 4 — Docs refresh + client hardening
+
+- Rewrote README and journal in a simpler onboarding style.
+- Cleaned up home-page copy and removed unnecessary inline env reminder text.
+- Improved guard/dashboard client behavior with safer React effect/ref handling and cleanup logic.
 
 ---
 
 ## What is working now
 
-- **Next.js** app: home → `POST /api/sessions` → dashboard and guard routes with TypeScript and Tailwind.
-- **Database**: `supabase/schema.sql` — `sessions`, `session_events`, indexes, `updated_at` trigger (run against your Supabase project).
-- **APIs**: create session; get/patch session; `POST .../simulate` with `{ violence: boolean }`; session **events** and **transcript** routes for audit/replay.
-- **Operator UI**: guard link copy, polling refresh, simulation control.
-- **Guard UI**: ringing UX, audio cues, Vapi integration (`VapiVoice`), dismiss and end-call flows aligned with server state.
-- **Environment**: `.env.local.example` lists Supabase, Roboflow, and Vapi variables; real values live only in `.env.local`.
+- End-to-end session flow in app routes.
+- Supabase-backed sessions and event logging.
+- Simulation path for violence/no-violence drills.
+- Guard call experience with ringing/audio + Vapi integration.
+- Environment template via `.env.local.example`.
 
 ---
 
-## Near-term roadmap (priority order)
+## What is left (end of journal)
 
-1. **Video ingest (remaining task)** — Add Super Face video bucket flow end-to-end: upload from dashboard, persist file path/URL, and thread stored video into processing (then Roboflow) instead of simulation-only.
-
-**After that**
-
-- Wire **Roboflow** workflow/inference to replace or gate simulation.
-- **Supabase Realtime** on `sessions` where polling is heavy today.
-- **History** view and automated tests for incident vs no-incident paths.
+1. Complete Super Face video bucket upload + ingest path end-to-end.
+2. Feed uploaded video path into processing/Roboflow path (not simulation-only).
+3. Replace or gate simulation with Roboflow inference results.
+4. Reduce heavy polling using Supabase Realtime where useful.
+5. Add history view and automated tests for incident/no-incident flows.
 
 ---
 
-## Principles (carry forward)
+## Operating rules
 
-- Log every meaningful state transition.
-- Prefer clear thresholds and short human-readable summaries over black-box scores.
-- Never commit secrets; rotate keys if a template or log ever leaked.
-
----
-
-## Session log
-
-Add a short entry when you merge meaningful work.
-
-### 2026-05-01 — Docs, home copy, client hardening
-
-- README and this journal rewritten for a clearer, friendlier onboarding path (env via `.env.local.example`, no secrets in git).
-- Home page: removed inline `.env.local` reminder; tightened hero copy for operators.
-- Guard/dashboard: small React effect cleanups (ref sync, deferred refresh/cleanup) for stricter runtime behavior.
-- **Next:** complete Super Face video bucket integration for real video ingest.
-
-### 2026-05-01 — UI polish completed; focus narrowed
-
-- Dashboard and guard UI polish is considered done for the current milestone.
-- Engineering focus is now narrowed to a single remaining deliverable: video upload/ingest through the Super Face video bucket.
-
-### 2026-05-01 — Baseline app + Supabase + simulated path
-
-- Runnable demo: sessions in Postgres, dashboard and guard UIs, simulation API, Vapi on guard, transcript persistence hooks.
-
-### 2026-05-01 — Documentation baseline
-
-- Initial README, journal structure, V1 architecture and flow notes.
+- Keep all meaningful state transitions logged.
+- Keep outcomes easy to understand for operators.
+- Never commit secrets; only keep real keys in local/private env.
