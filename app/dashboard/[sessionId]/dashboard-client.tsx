@@ -33,9 +33,20 @@ export function DashboardClient({ sessionId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showGuardQr, setShowGuardQr] = useState(false);
   const [transcriptEvents, setTranscriptEvents] = useState<SessionEvent[]>([]);
+  const [ayanMode, setAyanMode] = useState(() => {
+    if (typeof window === "undefined") return false;
+    return window.localStorage.getItem("shrike.ayan-mode") === "on";
+  });
+  const [ayanStepIndex, setAyanStepIndex] = useState(0);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
   const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
+  const detectionModeRef = useRef<HTMLSelectElement | null>(null);
+  const violenceButtonRef = useRef<HTMLButtonElement | null>(null);
+  const runSimulationButtonRef = useRef<HTMLButtonElement | null>(null);
+  const qrButtonRef = useRef<HTMLButtonElement | null>(null);
+  const sessionStatusRef = useRef<HTMLElement | null>(null);
+  const transcriptPanelRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
     recordSessionVisit(sessionId);
@@ -77,6 +88,8 @@ export function DashboardClient({ sessionId }: Props) {
 
   const serverRinging =
     session?.status === "ringing" || session?.ring === "ringing";
+  const connected =
+    session?.status === "connected" || session?.ring === "connected";
 
   useEffect(() => {
     const ms = serverRinging ? 550 : 4000;
@@ -89,10 +102,104 @@ export function DashboardClient({ sessionId }: Props) {
   }, [refreshTranscript, serverRinging]);
 
   const { lines, live } = foldVapiTranscriptEvents(transcriptEvents);
+  const hasLiveConversation =
+    connected || lines.length > 0 || Boolean(live.assistant || live.user);
+
+  const ayanSteps = [
+    {
+      id: "select-simulation",
+      title: "Select simulation fallback",
+      detail:
+        "First switch Detection Mode to Simulation fallback. We use this to run a safe guided demo without needing a live feed.",
+      target: "detectionMode" as const,
+      done: detectionMode === "simulation",
+    },
+    {
+      id: "select-violence",
+      title: "Choose Violence",
+      detail:
+        "In Simulation fallback, click Violence so the workflow triggers the urgent guard escalation path.",
+      target: "violenceToggle" as const,
+      done: violence,
+    },
+    {
+      id: "run-simulation",
+      title: "Run simulation",
+      detail:
+        "Now click Run simulation. This updates the session and starts the alert pipeline for the guard.",
+      target: "runSimulation" as const,
+      done: session?.incident === "violence" || session?.status === "ringing",
+    },
+    {
+      id: "open-qr",
+      title: "Show QR and scan with phone",
+      detail:
+        "Click the QR icon in Guard link, then scan it from the guard phone to open the guard screen.",
+      target: "qrButton" as const,
+      done: showGuardQr,
+    },
+    {
+      id: "wait-pickup",
+      title: "Wait for pickup call",
+      detail:
+        "Keep the guard page open on the phone and wait for the incoming call state. Then answer on the guard device.",
+      target: "sessionStatus" as const,
+      done: serverRinging || connected,
+    },
+    {
+      id: "speak-agent",
+      title: "Speak to the agent",
+      detail:
+        "Once connected, speak to the agent from the guard side. Watch this transcript panel to confirm two-way conversation.",
+      target: "transcript" as const,
+      done: hasLiveConversation,
+    },
+  ];
+
+  const ayanStep = ayanSteps[Math.min(ayanStepIndex, ayanSteps.length - 1)];
+
+  function highlightIf(stepTarget: (typeof ayanStep)["target"]) {
+    return ayanMode && ayanStep?.target === stepTarget
+      ? "ring-2 ring-warning ring-offset-2 ring-offset-surface-1"
+      : "";
+  }
+
+  function setAyanModeEnabled(enabled: boolean) {
+    setAyanMode(enabled);
+    setAyanStepIndex(0);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("shrike.ayan-mode", enabled ? "on" : "off");
+    }
+  }
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [lines.length, live.assistant, live.user]);
+
+  useEffect(() => {
+    if (!ayanMode) return;
+    if (!ayanStep?.done) return;
+    if (ayanStepIndex >= ayanSteps.length - 1) return;
+    const id = window.setTimeout(() => {
+      setAyanStepIndex((prev) => Math.min(prev + 1, ayanSteps.length - 1));
+    }, 300);
+    return () => window.clearTimeout(id);
+  }, [ayanMode, ayanStep?.done, ayanStepIndex, ayanSteps.length]);
+
+  useEffect(() => {
+    if (!ayanMode) return;
+    const targetMap = {
+      detectionMode: detectionModeRef.current,
+      violenceToggle: violenceButtonRef.current,
+      runSimulation: runSimulationButtonRef.current,
+      qrButton: qrButtonRef.current,
+      sessionStatus: sessionStatusRef.current,
+      transcript: transcriptPanelRef.current,
+    };
+    const el = targetMap[ayanStep.target];
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [ayanMode, ayanStep.target, ayanStepIndex]);
 
   const anyRunActive = runningSimulation || runningRoboflow;
 
@@ -317,7 +424,12 @@ export function DashboardClient({ sessionId }: Props) {
                 aria-label="Show guard link QR code"
                 aria-expanded={showGuardQr}
                 aria-controls="guard-link-qr"
-                className={cx(btnBase, "ml-auto h-9 w-9 p-0")}
+                ref={qrButtonRef}
+                className={cx(
+                  btnBase,
+                  "ml-auto h-9 w-9 p-0",
+                  highlightIf("qrButton"),
+                )}
               >
                 <svg
                   aria-hidden
@@ -365,6 +477,7 @@ export function DashboardClient({ sessionId }: Props) {
               exclusive while active.
             </p>
             <select
+              ref={detectionModeRef}
               value={detectionMode}
               onChange={(e) => {
                 const next = e.target.value as DetectionMode;
@@ -372,7 +485,10 @@ export function DashboardClient({ sessionId }: Props) {
                 setDetectionMode(next);
               }}
               disabled={anyRunActive}
-              className="h-9 w-full max-w-md border border-border-subtle bg-surface-0 px-2 font-mono text-xs text-text-primary"
+              className={cx(
+                "h-9 w-full max-w-md border border-border-subtle bg-surface-0 px-2 font-mono text-xs text-text-primary",
+                highlightIf("detectionMode"),
+              )}
             >
               <option value="roboflow">Roboflow</option>
               <option value="simulation">Simulation fallback</option>
@@ -486,6 +602,7 @@ export function DashboardClient({ sessionId }: Props) {
                 aria-label="Detection outcome"
               >
                 <button
+                  ref={violenceButtonRef}
                   type="button"
                   disabled={detectionMode !== "simulation" || anyRunActive}
                   onClick={() => setViolence(false)}
@@ -507,16 +624,18 @@ export function DashboardClient({ sessionId }: Props) {
                     violence
                       ? "bg-danger text-text-primary"
                       : "text-text-muted hover:bg-surface-2",
+                    highlightIf("violenceToggle"),
                   )}
                 >
                   Violence
                 </button>
               </div>
               <button
+                ref={runSimulationButtonRef}
                 type="button"
                 disabled={detectionMode !== "simulation" || anyRunActive}
                 onClick={() => void runSimulation()}
-                className={btnNeutral}
+                className={cx(btnNeutral, highlightIf("runSimulation"))}
               >
                 {runningSimulation ? "Running…" : "Run simulation"}
               </button>
@@ -529,32 +648,34 @@ export function DashboardClient({ sessionId }: Props) {
             ) : null}
           </OpsPanel>
 
-          <OpsPanel title="Session status">
-            {loading && !session ? (
-              <p className="font-mono text-xs text-text-faint">Loading…</p>
-            ) : session ? (
-              <dl className="grid gap-2 font-mono text-xs">
-                <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
-                  <dt className="text-text-muted">Status</dt>
-                  <dd className="font-tabular text-text-primary">
-                    {session.status}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
-                  <dt className="text-text-muted">Incident</dt>
-                  <dd className="font-tabular text-text-primary">
-                    {session.incident ?? "—"}
-                  </dd>
-                </div>
-                <div className="flex justify-between gap-4 py-1.5">
-                  <dt className="text-text-muted">Ring</dt>
-                  <dd className="font-tabular text-text-primary">
-                    {session.ring ?? "—"}
-                  </dd>
-                </div>
-              </dl>
-            ) : null}
-          </OpsPanel>
+          <div ref={sessionStatusRef}>
+            <OpsPanel title="Session status" className={highlightIf("sessionStatus")}>
+              {loading && !session ? (
+                <p className="font-mono text-xs text-text-faint">Loading…</p>
+              ) : session ? (
+                <dl className="grid gap-2 font-mono text-xs">
+                  <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
+                    <dt className="text-text-muted">Status</dt>
+                    <dd className="font-tabular text-text-primary">
+                      {session.status}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
+                    <dt className="text-text-muted">Incident</dt>
+                    <dd className="font-tabular text-text-primary">
+                      {session.incident ?? "—"}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between gap-4 py-1.5">
+                    <dt className="text-text-muted">Ring</dt>
+                    <dd className="font-tabular text-text-primary">
+                      {session.ring ?? "—"}
+                    </dd>
+                  </div>
+                </dl>
+              ) : null}
+            </OpsPanel>
+          </div>
 
           <OpsPanel title="Field response runbook">
             <p className="text-xs leading-relaxed text-text-muted">
@@ -624,57 +745,138 @@ export function DashboardClient({ sessionId }: Props) {
             )}
           </OpsPanel>
 
-          <OpsPanel title="Voice transcript" className="flex min-h-[280px] flex-1 flex-col">
-            <p className="text-xs text-text-muted">
-              Relay while Vapi is open. Assistant = dispatcher; Guard = line.
-            </p>
-            <div
-              className="mt-2 min-h-0 flex-1 overflow-y-auto border border-border-subtle bg-surface-0 p-3 text-sm"
-              aria-live="polite"
-            >
-              {lines.length === 0 && !live.assistant && !live.user ? (
-                <p className="text-xs text-text-faint">
-                  No transcript yet. When the guard answers an alert, lines
-                  appear here.
-                </p>
-              ) : (
-                <ul className="flex flex-col gap-3">
-                  {lines.map((line) => (
-                    <li key={line.id}>
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-                        {line.role === "assistant" ? "Assistant" : "Guard"}
-                      </p>
-                      <p className="mt-0.5 leading-snug text-text-primary">
-                        {line.text}
-                      </p>
-                    </li>
-                  ))}
-                  {live.assistant ? (
-                    <li>
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
-                        Assistant · live
-                      </p>
-                      <p className="mt-0.5 italic leading-snug text-text-muted">
-                        {live.assistant}
-                      </p>
-                    </li>
-                  ) : null}
-                  {live.user ? (
-                    <li>
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
-                        Guard · live
-                      </p>
-                      <p className="mt-0.5 italic leading-snug text-text-muted">
-                        {live.user}
-                      </p>
-                    </li>
-                  ) : null}
-                  <div ref={transcriptEndRef} />
-                </ul>
+          <div ref={transcriptPanelRef}>
+            <OpsPanel
+              title="Voice transcript"
+              className={cx(
+                "flex min-h-[280px] flex-1 flex-col",
+                highlightIf("transcript"),
               )}
-            </div>
-          </OpsPanel>
+            >
+              <p className="text-xs text-text-muted">
+                Relay while Vapi is open. Assistant = dispatcher; Guard = line.
+              </p>
+              <div
+                className="mt-2 min-h-0 flex-1 overflow-y-auto border border-border-subtle bg-surface-0 p-3 text-sm"
+                aria-live="polite"
+              >
+                {lines.length === 0 && !live.assistant && !live.user ? (
+                  <p className="text-xs text-text-faint">
+                    No transcript yet. When the guard answers an alert, lines
+                    appear here.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-3">
+                    {lines.map((line) => (
+                      <li key={line.id}>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                          {line.role === "assistant" ? "Assistant" : "Guard"}
+                        </p>
+                        <p className="mt-0.5 leading-snug text-text-primary">
+                          {line.text}
+                        </p>
+                      </li>
+                    ))}
+                    {live.assistant ? (
+                      <li>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
+                          Assistant · live
+                        </p>
+                        <p className="mt-0.5 italic leading-snug text-text-muted">
+                          {live.assistant}
+                        </p>
+                      </li>
+                    ) : null}
+                    {live.user ? (
+                      <li>
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
+                          Guard · live
+                        </p>
+                        <p className="mt-0.5 italic leading-snug text-text-muted">
+                          {live.user}
+                        </p>
+                      </li>
+                    ) : null}
+                    <div ref={transcriptEndRef} />
+                  </ul>
+                )}
+              </div>
+            </OpsPanel>
+          </div>
         </div>
+      </div>
+      <div className="fixed bottom-4 right-4 z-40 flex w-[min(94vw,380px)] flex-col gap-2 border border-border-strong bg-surface-1/95 p-3 shadow-2xl backdrop-blur">
+        <label className="flex items-center justify-between gap-3">
+          <span className="text-xs font-semibold uppercase tracking-wide text-text-primary">
+            Ayan mode
+          </span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={ayanMode}
+            onClick={() => setAyanModeEnabled(!ayanMode)}
+            className={cx(
+              "inline-flex h-7 min-w-[56px] items-center border px-2 text-[10px] font-semibold uppercase tracking-wide transition-colors",
+              ayanMode
+                ? "border-warning/70 bg-warning-surface text-warning"
+                : "border-border-subtle bg-surface-2 text-text-muted",
+            )}
+          >
+            {ayanMode ? "On" : "Off"}
+          </button>
+        </label>
+        {ayanMode ? (
+          <>
+            <div className="border border-warning/35 bg-warning-surface/40 p-2">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-warning">
+                Step {ayanStepIndex + 1} / {ayanSteps.length}
+              </p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {ayanStep.title}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                {ayanStep.detail}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setAyanStepIndex((prev) => Math.max(0, prev - 1))}
+                disabled={ayanStepIndex === 0}
+                className={btnBase}
+              >
+                Back
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setAyanStepIndex((prev) =>
+                    Math.min(prev + 1, ayanSteps.length - 1),
+                  )
+                }
+                className={cx(btnBase, "border-warning/40 text-warning")}
+              >
+                {ayanStep.done
+                  ? ayanStepIndex === ayanSteps.length - 1
+                    ? "Completed"
+                    : "Next"
+                  : "Skip"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setAyanModeEnabled(false)}
+                className={cx(btnBase, "ml-auto")}
+              >
+                Exit tutorial
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="text-xs text-text-muted">
+            Turn on Ayan mode for a highlighted, step-by-step walkthrough from
+            simulation fallback to speaking with the agent.
+          </p>
+        )}
       </div>
     </OpsShell>
   );
