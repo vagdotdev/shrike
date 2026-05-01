@@ -29,6 +29,67 @@ export function GuardClient({ sessionId }: Props) {
   const ringtoneIndexRef = useRef(0);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceCallActiveRef = useRef(false);
+  const ringtoneIntervalRef = useRef<number | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const audioUnlockedRef = useRef(false);
+
+  const stopFallbackRingtone = useCallback(() => {
+    if (ringtoneIntervalRef.current !== null) {
+      window.clearInterval(ringtoneIntervalRef.current);
+      ringtoneIntervalRef.current = null;
+    }
+  }, []);
+
+  const playFallbackBurst = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.08, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
+    gain.connect(ctx.destination);
+
+    const low = ctx.createOscillator();
+    low.type = "triangle";
+    low.frequency.setValueAtTime(760, now);
+    low.frequency.linearRampToValueAtTime(680, now + 0.24);
+    low.connect(gain);
+    low.start(now);
+    low.stop(now + 0.25);
+
+    const high = ctx.createOscillator();
+    high.type = "sine";
+    high.frequency.setValueAtTime(1120, now + 0.26);
+    high.frequency.linearRampToValueAtTime(980, now + 0.5);
+    high.connect(gain);
+    high.start(now + 0.26);
+    high.stop(now + 0.51);
+  }, []);
+
+  const startFallbackRingtone = useCallback(() => {
+    const ctx = audioContextRef.current;
+    if (!ctx || ringtoneIntervalRef.current !== null) return;
+    playFallbackBurst();
+    ringtoneIntervalRef.current = window.setInterval(playFallbackBurst, 1200);
+  }, [playFallbackBurst]);
+
+  const stopAllRingtoneAudio = useCallback(() => {
+    stopFallbackRingtone();
+    disposeRingtone(ringtoneAudioRef);
+  }, [stopFallbackRingtone]);
+
+  const playSelectedRingtone = useCallback(() => {
+    const audio = ringtoneAudioRef.current;
+    if (!audio) {
+      startFallbackRingtone();
+      return;
+    }
+    void audio.play().then(stopFallbackRingtone).catch(startFallbackRingtone);
+  }, [startFallbackRingtone, stopFallbackRingtone]);
 
   useEffect(() => {
     recordSessionVisit(sessionId);
@@ -76,7 +137,7 @@ export function GuardClient({ sessionId }: Props) {
   const endGuardCall = useCallback(async () => {
     setDismissIncoming(true);
     setVoiceCallActive(false);
-    disposeRingtone(ringtoneAudioRef);
+    stopAllRingtoneAudio();
     try {
       const res = await fetch(`/api/sessions/${sessionId}`, {
         method: "PATCH",
@@ -94,44 +155,85 @@ export function GuardClient({ sessionId }: Props) {
       setError(e instanceof Error ? e.message : "Network error");
     }
     await refresh();
-  }, [sessionId, refresh]);
+  }, [sessionId, refresh, stopAllRingtoneAudio]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const AC =
+      window.AudioContext ||
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AC) return;
+
+    const unlockAudio = () => {
+      if (!audioContextRef.current) {
+        audioContextRef.current = new AC();
+      }
+      const ctx = audioContextRef.current;
+      if (!ctx) return;
+      void ctx.resume().then(() => {
+        audioUnlockedRef.current = true;
+      }).catch(() => {});
+    };
+
+    window.addEventListener("pointerdown", unlockAudio);
+    window.addEventListener("keydown", unlockAudio);
+    window.addEventListener("touchstart", unlockAudio);
+    unlockAudio();
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio);
+      window.removeEventListener("keydown", unlockAudio);
+      window.removeEventListener("touchstart", unlockAudio);
+    };
+  }, []);
 
   useEffect(() => {
     const wasRinging = prevRingingRef.current;
     prevRingingRef.current = ringing;
 
     if (ringing && !wasRinging) {
-      disposeRingtone(ringtoneAudioRef);
+      stopAllRingtoneAudio();
       const src =
         GUARD_RINGTONES[ringtoneIndexRef.current % GUARD_RINGTONES.length];
       ringtoneIndexRef.current += 1;
       const audio = new Audio(src);
       audio.loop = true;
+      audio.preload = "auto";
+      audio.setAttribute("playsinline", "true");
+      audio.addEventListener("error", startFallbackRingtone);
       ringtoneAudioRef.current = audio;
       if (!voiceCallActiveRef.current) {
-        void audio.play().catch(() => {});
+        playSelectedRingtone();
       }
     }
 
     if (!ringing && wasRinging) {
-      disposeRingtone(ringtoneAudioRef);
+      stopAllRingtoneAudio();
       setVoiceCallActive(false);
     }
-  }, [ringing]);
+  }, [ringing, playSelectedRingtone, startFallbackRingtone, stopAllRingtoneAudio]);
 
   useEffect(() => {
     const audio = ringtoneAudioRef.current;
-    if (!audio) return;
     if (ringing && !voiceCallActive) {
-      void audio.play().catch(() => {});
+      playSelectedRingtone();
     } else {
-      audio.pause();
+      audio?.pause();
+      stopFallbackRingtone();
     }
-  }, [ringing, voiceCallActive]);
+  }, [ringing, voiceCallActive, playSelectedRingtone, stopFallbackRingtone]);
 
   useEffect(() => {
-    return () => disposeRingtone(ringtoneAudioRef);
-  }, []);
+    return () => {
+      stopAllRingtoneAudio();
+      const ctx = audioContextRef.current;
+      audioContextRef.current = null;
+      if (ctx) {
+        void ctx.close().catch(() => {});
+      }
+    };
+  }, [stopAllRingtoneAudio]);
 
   const connected = voiceCallActive || session?.status === "connected";
   const showCallScreen = ringing || connected;

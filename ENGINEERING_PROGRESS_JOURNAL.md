@@ -30,9 +30,7 @@ Scope stays narrow: **likely inmate-on-inmate violence** as a single detection t
 
 ## Near-term roadmap (priority order)
 
-1. **Video ingest** — Storage bucket (or chosen object store), upload from dashboard, persist path/URL, thread into processing (then Roboflow) instead of simulation-only.
-2. **Deploy + second device** — Public HTTPS URL (e.g. Vercel), production env vars, verify guard link on another phone (mic permissions, Vapi allowlisting if required).
-3. **UI polish** — Calmer typography and motion on dashboard and guard surfaces under “stress read” conditions.
+1. **Video ingest (remaining task)** — Add Super Face video bucket flow end-to-end: upload from dashboard, persist file path/URL, and thread stored video into processing (then Roboflow) instead of simulation-only.
 
 **After that**
 
@@ -59,7 +57,12 @@ Add a short entry when you merge meaningful work.
 - README and this journal rewritten for a clearer, friendlier onboarding path (env via `.env.local.example`, no secrets in git).
 - Home page: removed inline `.env.local` reminder; tightened hero copy for operators.
 - Guard/dashboard: small React effect cleanups (ref sync, deferred refresh/cleanup) for stricter runtime behavior.
-- **Next:** video bucket + deploy smoke test, then detector integration.
+- **Next:** complete Super Face video bucket integration for real video ingest.
+
+### 2026-05-01 — UI polish completed; focus narrowed
+
+- Dashboard and guard UI polish is considered done for the current milestone.
+- Engineering focus is now narrowed to a single remaining deliverable: video upload/ingest through the Super Face video bucket.
 
 ### 2026-05-01 — Baseline app + Supabase + simulated path
 
