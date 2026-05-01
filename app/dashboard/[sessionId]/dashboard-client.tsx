@@ -2,19 +2,44 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { OpsPanel, OpsShell } from "@/components/ops-shell";
 import { foldVapiTranscriptEvents } from "@/lib/call-transcript";
-import type { Session, SessionEvent } from "@/lib/types";
+import { recordSessionVisit } from "@/lib/recent-sessions";
+import type {
+  DetectionMode,
+  RoboflowSourceType,
+  Session,
+  SessionEvent,
+} from "@/lib/types";
 
 type Props = { sessionId: string };
 
+function cx(...parts: Array<string | undefined | false>) {
+  return parts.filter(Boolean).join(" ");
+}
+
 export function DashboardClient({ sessionId }: Props) {
   const [violence, setViolence] = useState(false);
+  const [detectionMode, setDetectionMode] = useState<DetectionMode>("roboflow");
+  const [sourceType, setSourceType] = useState<RoboflowSourceType>("upload");
+  const [streamUrl, setStreamUrl] = useState("");
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [cameraActive, setCameraActive] = useState(false);
+  const [cameraFrame, setCameraFrame] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
-  const [running, setRunning] = useState(false);
+  const [runningSimulation, setRunningSimulation] = useState(false);
+  const [runningRoboflow, setRunningRoboflow] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showGuardQr, setShowGuardQr] = useState(false);
   const [transcriptEvents, setTranscriptEvents] = useState<SessionEvent[]>([]);
   const transcriptEndRef = useRef<HTMLDivElement | null>(null);
+  const cameraVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+
+  useEffect(() => {
+    recordSessionVisit(sessionId);
+  }, [sessionId]);
 
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}`);
@@ -69,8 +94,77 @@ export function DashboardClient({ sessionId }: Props) {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [lines.length, live.assistant, live.user]);
 
+  const anyRunActive = runningSimulation || runningRoboflow;
+
+  const stopCamera = useCallback(() => {
+    const stream = cameraStreamRef.current;
+    if (stream) {
+      for (const track of stream.getTracks()) track.stop();
+      cameraStreamRef.current = null;
+    }
+    setCameraActive(false);
+  }, []);
+
+  useEffect(() => {
+    return () => stopCamera();
+  }, [stopCamera]);
+
+  const showLiveCamera =
+    detectionMode === "roboflow" && sourceType === "camera" && cameraActive;
+
+  useEffect(() => {
+    const el = cameraVideoRef.current;
+    const stream = cameraStreamRef.current;
+    if (el && stream && showLiveCamera) {
+      el.srcObject = stream;
+    }
+  }, [showLiveCamera, cameraActive]);
+
+  async function startCamera() {
+    setError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+      }
+      setCameraActive(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not start camera");
+    }
+  }
+
+  function captureCameraFrame() {
+    const video = cameraVideoRef.current;
+    if (!video || video.videoWidth === 0 || video.videoHeight === 0) {
+      setError("Camera is not ready yet");
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      setError("Unable to capture camera frame");
+      return;
+    }
+    ctx.drawImage(video, 0, 0);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    const base64 = dataUrl.split(",")[1] ?? null;
+    setCameraFrame(base64);
+  }
+
+  async function fileToBase64(file: File) {
+    const buf = await file.arrayBuffer();
+    let binary = "";
+    const bytes = new Uint8Array(buf);
+    for (let i = 0; i < bytes.length; i += 1)
+      binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
   async function runSimulation() {
-    setRunning(true);
+    setRunningSimulation(true);
     setError(null);
     try {
       const res = await fetch(`/api/sessions/${sessionId}/simulate`, {
@@ -87,191 +181,501 @@ export function DashboardClient({ sessionId }: Props) {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Request failed");
     } finally {
-      setRunning(false);
+      setRunningSimulation(false);
+    }
+  }
+
+  async function runRoboflow() {
+    setRunningRoboflow(true);
+    setError(null);
+    try {
+      const payload: Record<string, unknown> = { sourceType };
+      if (sourceType === "stream_url") {
+        if (!streamUrl.trim()) {
+          setError("Stream URL is required");
+          return;
+        }
+        payload.streamUrl = streamUrl.trim();
+      } else if (sourceType === "upload") {
+        if (!uploadFile) {
+          setError("Choose a file first");
+          return;
+        }
+        payload.videoBase64 = await fileToBase64(uploadFile);
+        payload.mimeType = uploadFile.type || "application/octet-stream";
+      } else {
+        if (!cameraFrame) {
+          setError("Capture a camera frame first");
+          return;
+        }
+        payload.imageBase64 = cameraFrame;
+        payload.mimeType = "image/jpeg";
+      }
+
+      const res = await fetch(`/api/sessions/${sessionId}/detect`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json()) as { session?: Session; error?: string };
+      if (!res.ok) {
+        setError(json.error ?? res.statusText);
+        return;
+      }
+      setSession(json.session ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Request failed");
+    } finally {
+      setRunningRoboflow(false);
     }
   }
 
   const guardPath = `/guard/${sessionId}`;
+  const guardQrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(
+    typeof window === "undefined"
+      ? guardPath
+      : `${window.location.origin}${guardPath}`,
+  )}`;
+
+  const btnBase =
+    "inline-flex items-center justify-center border border-border-subtle bg-surface-2 px-3 py-1.5 text-xs font-medium text-text-primary transition-colors hover:border-border-strong hover:bg-surface-3 disabled:opacity-50";
+  const btnPrimary =
+    "inline-flex h-10 items-center justify-center border border-accent/50 bg-accent-surface px-4 text-xs font-semibold uppercase tracking-wide text-accent transition-colors hover:bg-accent/20 disabled:opacity-50";
+  const btnNeutral =
+    "inline-flex h-10 items-center justify-center border border-border-strong bg-surface-2 px-4 text-xs font-semibold uppercase tracking-wide text-text-primary transition-colors hover:bg-surface-3 disabled:opacity-50";
 
   return (
-    <div className="mx-auto flex max-w-lg flex-col gap-8 px-6 py-12 text-zinc-900 dark:text-zinc-50">
-      <header className="flex flex-col gap-2">
-        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-          Operator dashboard
-        </p>
-        <h1 className="text-2xl font-semibold tracking-tight">Demo session</h1>
-        <p className="font-mono text-xs text-zinc-500">{sessionId}</p>
-      </header>
+    <OpsShell
+      roleLabel="Operator"
+      missionLine="Live workspace"
+      sessionId={sessionId}
+      session={session}
+      barExtra={
+        loading && !session ? (
+          <span className="font-mono text-[10px] text-text-faint">sync…</span>
+        ) : null
+      }
+    >
+      <div className="mx-auto flex min-h-0 max-w-[1600px] flex-col gap-4 lg:flex-row lg:gap-0 lg:divide-x lg:divide-border-subtle">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 lg:pr-4">
+          <section className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            <div className="ops-reticle border border-danger/55 bg-danger-surface px-3 py-2">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-danger">
+                Threat
+              </p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {session?.incident && session.incident !== "none"
+                  ? session.incident
+                  : "none"}
+              </p>
+            </div>
+            <div className="ops-reticle border border-accent/55 bg-accent-surface px-3 py-2">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-accent">
+                Intel
+              </p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {session?.status ?? "syncing"}
+              </p>
+            </div>
+            <div className="ops-reticle border border-warning/55 bg-warning-surface px-3 py-2">
+              <p className="font-mono text-[10px] uppercase tracking-wide text-warning">
+                Queue
+              </p>
+              <p className="mt-1 text-sm font-semibold text-text-primary">
+                {serverRinging ? "ringing" : "standby"}
+              </p>
+            </div>
+          </section>
 
-      <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Guard link
-        </h2>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Open this on another window or device so the guard sees live status.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Link
-            href={guardPath}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-blue-600 underline-offset-2 hover:underline dark:text-blue-400"
-          >
-            Open guard page
-          </Link>
-          <button
-            type="button"
-            onClick={() =>
-              void navigator.clipboard?.writeText(
-                `${window.location.origin}${guardPath}`,
-              )
-            }
-            className="rounded-full border border-zinc-300 px-3 py-1 text-xs font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:text-zinc-300 dark:hover:bg-zinc-900"
-          >
-            Copy URL
-          </button>
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-3 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Live voice transcript
-        </h2>
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">
-          Relays from the guard handset while the Vapi line is open. Assistant is
-          the AI dispatcher; Guard is the officer on the line.
-        </p>
-        <div
-          className="max-h-72 overflow-y-auto rounded-lg border border-zinc-200 bg-zinc-50/80 p-3 text-sm dark:border-zinc-700 dark:bg-zinc-900/50"
-          aria-live="polite"
-        >
-          {lines.length === 0 &&
-          !live.assistant &&
-          !live.user ? (
-            <p className="text-zinc-500">
-              No transcript yet. When the guard answers an alert, lines appear
-              here in near real time.
+          <OpsPanel title="Guard link" className="relative">
+            <p className="text-xs leading-relaxed text-text-muted">
+              Open on another display so the guard sees live status.
             </p>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {lines.map((line) => (
-                <li key={line.id}>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
-                    {line.role === "assistant" ? "Assistant" : "Guard"}
-                  </p>
-                  <p className="mt-0.5 leading-snug text-zinc-800 dark:text-zinc-100">
-                    {line.text}
-                  </p>
-                </li>
-              ))}
-              {live.assistant ? (
-                <li>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
-                    Assistant · live
-                  </p>
-                  <p className="mt-0.5 italic leading-snug text-zinc-600 dark:text-zinc-400">
-                    {live.assistant}
-                  </p>
-                </li>
+            <div className="flex flex-wrap items-center gap-2 border-t border-border-subtle pt-3">
+              <Link
+                href={guardPath}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cx(btnBase, "border-accent/30 text-accent")}
+              >
+                Open guard phone
+              </Link>
+              <button
+                type="button"
+                onClick={() =>
+                  void navigator.clipboard?.writeText(
+                    `${window.location.origin}${guardPath}`,
+                  )
+                }
+                className={btnBase}
+              >
+                Copy URL
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowGuardQr((open) => !open)}
+                aria-label="Show guard link QR code"
+                aria-expanded={showGuardQr}
+                aria-controls="guard-link-qr"
+                className={cx(btnBase, "ml-auto h-9 w-9 p-0")}
+              >
+                <svg
+                  aria-hidden
+                  viewBox="0 0 24 24"
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="3" width="7" height="7" />
+                  <rect x="14" y="3" width="7" height="7" />
+                  <rect x="3" y="14" width="7" height="7" />
+                  <path d="M14 14h3v3h-3zM17 17h4M14 20h3M20 14v3" />
+                </svg>
+              </button>
+              {showGuardQr ? (
+                <>
+                  <button
+                    type="button"
+                    aria-label="Close QR popover"
+                    className="fixed inset-0 z-10 cursor-default bg-black/40"
+                    onClick={() => setShowGuardQr(false)}
+                  />
+                  <div
+                    id="guard-link-qr"
+                    className="absolute right-3 top-full z-20 mt-2 border border-border-subtle bg-surface-1 p-2 shadow-lg"
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element -- external QR API */}
+                    <img
+                      src={guardQrUrl}
+                      alt="QR code for the guard link"
+                      className="h-36 w-36"
+                    />
+                  </div>
+                </>
               ) : null}
-              {live.user ? (
-                <li>
-                  <p className="text-[11px] font-medium uppercase tracking-wide text-amber-700 dark:text-amber-400">
-                    Guard · live
-                  </p>
-                  <p className="mt-0.5 italic leading-snug text-zinc-600 dark:text-zinc-400">
-                    {live.user}
-                  </p>
-                </li>
+            </div>
+          </OpsPanel>
+
+          <OpsPanel title="Detection">
+            <p className="text-xs leading-relaxed text-text-muted">
+              Roboflow is primary; simulation is a fallback. Runs are mutually
+              exclusive while active.
+            </p>
+            <select
+              value={detectionMode}
+              onChange={(e) => {
+                const next = e.target.value as DetectionMode;
+                if (next !== "roboflow") stopCamera();
+                setDetectionMode(next);
+              }}
+              disabled={anyRunActive}
+              className="h-9 w-full max-w-md border border-border-subtle bg-surface-0 px-2 font-mono text-xs text-text-primary"
+            >
+              <option value="roboflow">Roboflow</option>
+              <option value="simulation">Simulation fallback</option>
+            </select>
+
+            <div
+              className={cx(
+                "flex flex-col gap-3 border p-3",
+                detectionMode === "roboflow"
+                  ? "border-accent/40 bg-accent-surface/30"
+                  : "border-border-subtle opacity-60",
+              )}
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Roboflow
+              </p>
+              <select
+                value={sourceType}
+                onChange={(e) => {
+                  const next = e.target.value as RoboflowSourceType;
+                  if (next !== "camera") stopCamera();
+                  setSourceType(next);
+                }}
+                disabled={detectionMode !== "roboflow" || anyRunActive}
+                className="h-9 border border-border-subtle bg-surface-0 px-2 font-mono text-xs"
+              >
+                <option value="upload">Upload video</option>
+                <option value="camera">Live camera</option>
+                <option value="stream_url">Stream URL</option>
+              </select>
+
+              {sourceType === "upload" ? (
+                <input
+                  type="file"
+                  accept="video/*,image/*"
+                  disabled={detectionMode !== "roboflow" || anyRunActive}
+                  onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                  className="text-xs text-text-muted file:mr-2 file:border file:border-border-subtle file:bg-surface-2 file:px-2 file:py-1 file:text-xs"
+                />
               ) : null}
-              <div ref={transcriptEndRef} />
-            </ul>
-          )}
+
+              {sourceType === "stream_url" ? (
+                <input
+                  type="url"
+                  placeholder="https://example.com/stream.m3u8"
+                  value={streamUrl}
+                  disabled={detectionMode !== "roboflow" || anyRunActive}
+                  onChange={(e) => setStreamUrl(e.target.value)}
+                  className="h-9 border border-border-subtle bg-surface-0 px-2 font-mono text-xs"
+                />
+              ) : null}
+
+              {sourceType === "camera" ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      disabled={detectionMode !== "roboflow" || anyRunActive}
+                      onClick={() =>
+                        void (cameraActive ? stopCamera() : startCamera())
+                      }
+                      className={btnBase}
+                    >
+                      {cameraActive ? "Stop camera" : "Start camera"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={
+                        detectionMode !== "roboflow" ||
+                        anyRunActive ||
+                        !cameraActive
+                      }
+                      onClick={captureCameraFrame}
+                      className={btnBase}
+                    >
+                      Capture frame
+                    </button>
+                  </div>
+                  {cameraFrame ? (
+                    <p className="font-mono text-[10px] text-text-faint">
+                      Frame buffered.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                disabled={detectionMode !== "roboflow" || anyRunActive}
+                onClick={() => void runRoboflow()}
+                className={btnPrimary}
+              >
+                {runningRoboflow ? "Running Roboflow…" : "Run Roboflow"}
+              </button>
+            </div>
+
+            <div
+              className={cx(
+                "flex flex-col gap-3 border p-3",
+                detectionMode === "simulation"
+                  ? "border-warning/45 bg-warning-surface/40"
+                  : "border-border-subtle opacity-60",
+              )}
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                Simulation fallback
+              </p>
+              <div
+                className="flex border border-border-subtle p-0.5"
+                role="group"
+                aria-label="Detection outcome"
+              >
+                <button
+                  type="button"
+                  disabled={detectionMode !== "simulation" || anyRunActive}
+                  onClick={() => setViolence(false)}
+                  className={cx(
+                    "flex-1 px-3 py-2 text-xs font-medium transition-colors",
+                    !violence
+                      ? "bg-surface-3 text-text-primary"
+                      : "text-text-muted hover:bg-surface-2",
+                  )}
+                >
+                  No violence
+                </button>
+                <button
+                  type="button"
+                  disabled={detectionMode !== "simulation" || anyRunActive}
+                  onClick={() => setViolence(true)}
+                  className={cx(
+                    "flex-1 px-3 py-2 text-xs font-medium transition-colors",
+                    violence
+                      ? "bg-danger text-text-primary"
+                      : "text-text-muted hover:bg-surface-2",
+                  )}
+                >
+                  Violence
+                </button>
+              </div>
+              <button
+                type="button"
+                disabled={detectionMode !== "simulation" || anyRunActive}
+                onClick={() => void runSimulation()}
+                className={btnNeutral}
+              >
+                {runningSimulation ? "Running…" : "Run simulation"}
+              </button>
+            </div>
+
+            {error ? (
+              <p className="border border-danger/40 bg-danger-surface px-3 py-2 font-mono text-xs text-danger">
+                {error}
+              </p>
+            ) : null}
+          </OpsPanel>
+
+          <OpsPanel title="Session status">
+            {loading && !session ? (
+              <p className="font-mono text-xs text-text-faint">Loading…</p>
+            ) : session ? (
+              <dl className="grid gap-2 font-mono text-xs">
+                <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
+                  <dt className="text-text-muted">Status</dt>
+                  <dd className="font-tabular text-text-primary">
+                    {session.status}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-border-subtle py-1.5">
+                  <dt className="text-text-muted">Incident</dt>
+                  <dd className="font-tabular text-text-primary">
+                    {session.incident ?? "—"}
+                  </dd>
+                </div>
+                <div className="flex justify-between gap-4 py-1.5">
+                  <dt className="text-text-muted">Ring</dt>
+                  <dd className="font-tabular text-text-primary">
+                    {session.ring ?? "—"}
+                  </dd>
+                </div>
+              </dl>
+            ) : null}
+          </OpsPanel>
+
+          <OpsPanel title="Field response runbook">
+            <p className="text-xs leading-relaxed text-text-muted">
+              Guard action flow during a violent escalation. Keep radio traffic
+              short and announce location before contact.
+            </p>
+            <div className="space-y-2 border border-border-subtle bg-surface-0 p-3">
+              <div className="ops-reticle border border-warning/45 bg-warning-surface px-3 py-2">
+                <p className="font-mono text-[10px] uppercase tracking-wide text-warning">
+                  01 · Approach
+                </p>
+                <p className="text-xs text-text-primary">
+                  Move to corridor entry, maintain visual, request backup.
+                </p>
+              </div>
+              <p className="font-mono text-[10px] text-text-faint">↓ secure channel</p>
+              <div className="ops-reticle border border-danger/45 bg-danger-surface px-3 py-2">
+                <p className="font-mono text-[10px] uppercase tracking-wide text-danger">
+                  02 · Contact
+                </p>
+                <p className="text-xs text-text-primary">
+                  Separate culprits, issue verbal commands, confirm compliance.
+                </p>
+              </div>
+              <p className="font-mono text-[10px] text-text-faint">↓ transcript logging</p>
+              <div className="ops-reticle border border-accent/45 bg-accent-surface px-3 py-2">
+                <p className="font-mono text-[10px] uppercase tracking-wide text-accent">
+                  03 · Stabilize
+                </p>
+                <p className="text-xs text-text-primary">
+                  Report status, mark safe zone, hand over to response lead.
+                </p>
+              </div>
+            </div>
+          </OpsPanel>
+
+          <p className="text-[11px] text-text-faint">
+            <Link
+              href="/"
+              className="text-text-muted underline-offset-2 hover:text-accent hover:underline"
+            >
+              Command home
+            </Link>
+          </p>
         </div>
-      </section>
 
-      <section className="flex flex-col gap-4 rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Simulated detection
-        </h2>
-        <p className="text-sm leading-6 text-zinc-600 dark:text-zinc-400">
-          Instead of uploading video, pick what the vision pipeline would have
-          concluded, then run it through the same session state updates and
-          guard alerting path.
-        </p>
+        <div className="flex w-full shrink-0 flex-col gap-4 lg:w-[min(100%,400px)] lg:pl-4">
+          <OpsPanel title="Video / feed" className="min-h-[200px] flex-1">
+            {showLiveCamera ? (
+              <video
+                ref={cameraVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="aspect-video w-full border border-border-subtle bg-black object-contain"
+              />
+            ) : (
+              <div className="flex flex-1 flex-col items-start justify-center gap-2 border border-dashed border-border-subtle bg-surface-0 p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                  No live feed
+                </p>
+                <p className="text-xs leading-relaxed text-text-faint">
+                  Select live camera and start camera to preview here. Upload and
+                  stream URL paths do not render a preview in this build.
+                </p>
+              </div>
+            )}
+          </OpsPanel>
 
-        <div
-          className="flex rounded-lg border border-zinc-200 p-1 dark:border-zinc-700"
-          role="group"
-          aria-label="Detection outcome"
-        >
-          <button
-            type="button"
-            onClick={() => setViolence(false)}
-            className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              !violence
-                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
-                : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-900"
-            }`}
-          >
-            No violence
-          </button>
-          <button
-            type="button"
-            onClick={() => setViolence(true)}
-            className={`flex-1 rounded-md px-3 py-2 text-sm font-medium transition-colors ${
-              violence
-                ? "bg-red-600 text-white dark:bg-red-600"
-                : "text-zinc-600 hover:bg-zinc-50 dark:text-zinc-400 dark:hover:bg-zinc-900"
-            }`}
-          >
-            Violence
-          </button>
+          <OpsPanel title="Voice transcript" className="flex min-h-[280px] flex-1 flex-col">
+            <p className="text-xs text-text-muted">
+              Relay while Vapi is open. Assistant = dispatcher; Guard = line.
+            </p>
+            <div
+              className="mt-2 min-h-0 flex-1 overflow-y-auto border border-border-subtle bg-surface-0 p-3 text-sm"
+              aria-live="polite"
+            >
+              {lines.length === 0 && !live.assistant && !live.user ? (
+                <p className="text-xs text-text-faint">
+                  No transcript yet. When the guard answers an alert, lines
+                  appear here.
+                </p>
+              ) : (
+                <ul className="flex flex-col gap-3">
+                  {lines.map((line) => (
+                    <li key={line.id}>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+                        {line.role === "assistant" ? "Assistant" : "Guard"}
+                      </p>
+                      <p className="mt-0.5 leading-snug text-text-primary">
+                        {line.text}
+                      </p>
+                    </li>
+                  ))}
+                  {live.assistant ? (
+                    <li>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
+                        Assistant · live
+                      </p>
+                      <p className="mt-0.5 italic leading-snug text-text-muted">
+                        {live.assistant}
+                      </p>
+                    </li>
+                  ) : null}
+                  {live.user ? (
+                    <li>
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-warning">
+                        Guard · live
+                      </p>
+                      <p className="mt-0.5 italic leading-snug text-text-muted">
+                        {live.user}
+                      </p>
+                    </li>
+                  ) : null}
+                  <div ref={transcriptEndRef} />
+                </ul>
+              )}
+            </div>
+          </OpsPanel>
         </div>
-
-        <button
-          type="button"
-          disabled={running}
-          onClick={() => void runSimulation()}
-          className="flex h-11 items-center justify-center rounded-full bg-zinc-900 text-sm font-medium text-white disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900"
-        >
-          {running ? "Running…" : "Run simulation"}
-        </button>
-
-        {error && (
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        )}
-      </section>
-
-      <section className="rounded-xl border border-zinc-200 bg-zinc-50 p-5 dark:border-zinc-800 dark:bg-zinc-900/40">
-        <h2 className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">
-          Session status
-        </h2>
-        {loading && !session ? (
-          <p className="mt-2 text-sm text-zinc-500">Loading…</p>
-        ) : session ? (
-          <dl className="mt-3 grid gap-2 text-sm">
-            <div className="flex justify-between gap-4">
-              <dt className="text-zinc-500">Status</dt>
-              <dd className="font-mono text-xs">{session.status}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-zinc-500">Incident</dt>
-              <dd className="font-mono text-xs">{session.incident ?? "—"}</dd>
-            </div>
-            <div className="flex justify-between gap-4">
-              <dt className="text-zinc-500">Ring</dt>
-              <dd className="font-mono text-xs">{session.ring ?? "—"}</dd>
-            </div>
-          </dl>
-        ) : null}
-      </section>
-
-      <p className="text-center text-sm text-zinc-500">
-        <Link href="/" className="underline-offset-2 hover:underline">
-          Home
-        </Link>
-      </p>
-    </div>
+      </div>
+    </OpsShell>
   );
 }

@@ -28,3 +28,7 @@ export type SessionEvent = {
   payload: Record<string, unknown> | null;
   created_at: string;
 };
+
+export type DetectionMode = "simulation" | "roboflow";
+
+export type RoboflowSourceType = "upload" | "camera" | "stream_url";

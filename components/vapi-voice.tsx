@@ -14,7 +14,15 @@ type VapiVoiceProps = {
   onCallEnd?: () => void;
   /** When set, transcript lines are POSTed for the operator dashboard. */
   relaySessionId?: string | null;
+  containerClassName?: string;
+  buttonClassName?: string;
+  errorClassName?: string;
+  missingKeysClassName?: string;
 };
+
+function cx(...parts: Array<string | undefined | false>) {
+  return parts.filter(Boolean).join(" ");
+}
 
 const PARTIAL_DEBOUNCE_MS = 320;
 
@@ -48,6 +56,10 @@ export function VapiVoice({
   onCallStart,
   onCallEnd,
   relaySessionId,
+  containerClassName,
+  buttonClassName,
+  errorClassName,
+  missingKeysClassName,
 }: VapiVoiceProps) {
   const vapiRef = useRef<Vapi | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
@@ -205,13 +217,18 @@ export function VapiVoice({
 
   if (!publicKey || !assistantId) {
     return (
-      <p className="max-w-md text-sm leading-6 text-zinc-600 dark:text-zinc-400">
+      <p
+        className={cx(
+          "max-w-md text-sm leading-6 text-text-muted",
+          missingKeysClassName,
+        )}
+      >
         Add{" "}
-        <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-xs dark:bg-zinc-900">
+        <code className="border border-border-subtle bg-surface-2 px-1 py-0.5 font-mono text-xs">
           NEXT_PUBLIC_VAPI_PUBLIC_KEY
         </code>{" "}
         and{" "}
-        <code className="rounded bg-zinc-100 px-1 py-0.5 font-mono text-xs dark:bg-zinc-900">
+        <code className="border border-border-subtle bg-surface-2 px-1 py-0.5 font-mono text-xs">
           NEXT_PUBLIC_VAPI_ASSISTANT_ID
         </code>{" "}
         to <span className="font-mono text-xs">.env.local</span> to enable voice.
@@ -230,17 +247,25 @@ export function VapiVoice({
           : (startLabel ?? "Start voice");
 
   return (
-    <div className="flex flex-col items-stretch gap-3 sm:items-start">
+    <div
+      className={cx(
+        "flex flex-col items-stretch gap-3 sm:items-start",
+        containerClassName,
+      )}
+    >
       <button
         type="button"
         onClick={() => void handleClick()}
         disabled={busy && callState !== "active"}
-        className="flex h-12 w-full items-center justify-center rounded-full bg-zinc-900 px-6 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200 sm:w-auto"
+        className={cx(
+          "flex h-10 w-full items-center justify-center border border-border-strong bg-surface-2 px-4 text-xs font-semibold uppercase tracking-wide text-text-primary transition-colors hover:bg-surface-3 disabled:cursor-not-allowed disabled:opacity-60 sm:w-auto",
+          buttonClassName,
+        )}
       >
         {label}
       </button>
       {callState === "error" && (
-        <p className="text-sm text-red-600 dark:text-red-400">
+        <p className={cx("text-sm text-danger", errorClassName)}>
           Something went wrong. Check the browser console and your Vapi
           dashboard.
         </p>

@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { VapiVoice } from "@/components/vapi-voice";
+import { recordSessionVisit } from "@/lib/recent-sessions";
 import type { Session } from "@/lib/types";
 
 const GUARD_RINGTONES = ["/media/walkie1.mp3", "/media/walkie2.mp3"] as const;
@@ -24,12 +24,15 @@ export function GuardClient({ sessionId }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [voiceCallActive, setVoiceCallActive] = useState(false);
-  /** After the guard ends the voice call, hide ring UI and audio until the server stops ringing (or PATCH applies). */
   const [dismissIncoming, setDismissIncoming] = useState(false);
   const prevRingingRef = useRef(false);
   const ringtoneIndexRef = useRef(0);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceCallActiveRef = useRef(false);
+
+  useEffect(() => {
+    recordSessionVisit(sessionId);
+  }, [sessionId]);
 
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}`);
@@ -99,7 +102,8 @@ export function GuardClient({ sessionId }: Props) {
 
     if (ringing && !wasRinging) {
       disposeRingtone(ringtoneAudioRef);
-      const src = GUARD_RINGTONES[ringtoneIndexRef.current % GUARD_RINGTONES.length];
+      const src =
+        GUARD_RINGTONES[ringtoneIndexRef.current % GUARD_RINGTONES.length];
       ringtoneIndexRef.current += 1;
       const audio = new Audio(src);
       audio.loop = true;
@@ -128,94 +132,101 @@ export function GuardClient({ sessionId }: Props) {
   useEffect(() => {
     return () => disposeRingtone(ringtoneAudioRef);
   }, []);
-  const clear =
-    session?.status === "no_incident" ||
-    session?.incident === "none" ||
-    session?.ring === "not_rung";
-  const processing = session?.status === "processing";
+
+  const connected = voiceCallActive || session?.status === "connected";
+  const showCallScreen = ringing || connected;
+  const phoneApps = [
+    "Messages",
+    "Contacts",
+    "Mail",
+    "Camera",
+    "Maps",
+    "Notes",
+    "Settings",
+    "Browser",
+    "Clock",
+  ] as const;
 
   return (
-    <div className="mx-auto flex min-h-[80vh] max-w-md flex-col gap-6 px-6 py-10 text-zinc-900 dark:text-zinc-50">
-      <header className="text-center">
-        <p className="text-xs font-medium uppercase tracking-wide text-zinc-500">
-          Guard handset
-        </p>
-        <h1 className="mt-1 text-xl font-semibold">Block feed</h1>
-        <p className="mt-1 font-mono text-[11px] text-zinc-500">{sessionId}</p>
-      </header>
+    <div className="min-h-screen bg-black text-zinc-100">
+      <div className="mx-auto flex min-h-screen w-full max-w-sm flex-col bg-zinc-950">
+        <header className="flex items-center justify-between border-b border-zinc-800 px-4 py-2">
+          <div className="font-mono text-[11px] text-zinc-300">11:56</div>
+          <div className="font-mono text-[11px] text-zinc-400">Guard Phone</div>
+          <div className="font-mono text-[11px] text-zinc-300">100%</div>
+        </header>
 
-      {error && (
-        <p className="rounded-lg bg-red-50 px-4 py-3 text-center text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-          {error}
-        </p>
-      )}
+        <main className="flex flex-1 flex-col gap-4 p-4">
+        {error ? (
+          <p className="border border-red-600/50 bg-red-950/40 px-3 py-2 font-mono text-xs text-red-300">
+            {error}
+          </p>
+        ) : null}
 
-      {loading && !session ? (
-        <p className="text-center text-sm text-zinc-500">Connecting…</p>
-      ) : null}
+        {loading && !session ? (
+          <p className="font-mono text-xs text-zinc-500">Connecting…</p>
+        ) : null}
 
-      {session && (
-        <div
-          className={`flex flex-col gap-4 rounded-2xl border p-6 transition-colors ${
-            ringing
-              ? "border-red-500 bg-red-50 dark:border-red-500 dark:bg-red-950/30"
-              : "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
-          }`}
-        >
-          {ringing ? (
-            <>
-              <p className="text-center text-sm font-semibold uppercase tracking-wide text-red-700 dark:text-red-300">
-                Incoming alert
-              </p>
-              <p className="text-center text-base leading-snug text-red-900 dark:text-red-100">
-                Possible inmate-on-inmate violence flagged on your block.
-                Answer the line to connect with the assistant.
-              </p>
-              <div className="mt-2 border-t border-red-200 pt-4 dark:border-red-900">
+        {session &&
+          (showCallScreen ? (
+            <section className="flex min-h-[32rem] flex-1 flex-col justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-5">
+              <div className="text-center">
+                <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">
+                  Shrike Connect
+                </p>
+                <p
+                  className={`mt-6 text-xs uppercase tracking-[0.18em] ${
+                    ringing ? "text-amber-300" : "text-emerald-300"
+                  }`}
+                >
+                  {ringing ? "Incoming call" : "Connected"}
+                </p>
+                <h1 className="mt-2 text-3xl font-semibold">
+                  {ringing ? "Answer call" : "On call"}
+                </h1>
+                <p className="mt-3 text-sm text-zinc-400">
+                  {ringing
+                    ? "Priority incident line is requesting connection."
+                    : "Guard voice line active."}
+                </p>
+              </div>
+              <div>
                 <VapiVoice
                   relaySessionId={sessionId}
-                  startLabel="Answer voice line"
+                  startLabel="Answer call"
                   endLabel="End call"
                   onCallStart={() => setVoiceCallActive(true)}
                   onCallEnd={() => void endGuardCall()}
+                  containerClassName="items-stretch sm:items-stretch"
+                  buttonClassName={`h-11 w-full rounded-xl text-sm font-semibold sm:w-full ${
+                    ringing
+                      ? "bg-emerald-500 text-emerald-950 hover:bg-emerald-400 dark:bg-emerald-500 dark:text-emerald-950 dark:hover:bg-emerald-400"
+                      : "bg-red-600 text-red-50 hover:bg-red-500 dark:bg-red-600 dark:text-red-50 dark:hover:bg-red-500"
+                  }`}
+                  errorClassName="text-red-300"
+                  missingKeysClassName="text-zinc-400"
                 />
               </div>
-            </>
-          ) : session?.status === "resolved" && !processing ? (
-            <p className="text-center text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Voice line ended. This alert is cleared and the feed is back on
-              standby.
-            </p>
-          ) : clear && !processing ? (
-            <p className="text-center text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-              Feed is quiet. Latest check:{" "}
-              <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                no incident
-              </span>
-              .
-            </p>
+            </section>
           ) : (
-            <p className="text-center text-sm text-zinc-600 dark:text-zinc-400">
-              Standing by…
-              {processing && (
-                <span className="mt-2 block font-medium text-amber-700 dark:text-amber-400">
-                  Processing simulation…
-                </span>
-              )}
-            </p>
-          )}
-
-          <p className="text-center font-mono text-[10px] text-zinc-400">
-            status: {session.status}
-          </p>
-        </div>
-      )}
-
-      <p className="text-center text-sm text-zinc-500">
-        <Link href="/" className="underline-offset-2 hover:underline">
-          Home
-        </Link>
-      </p>
+            <section className="min-h-[32rem] rounded-xl border border-zinc-800 bg-gradient-to-b from-sky-700 via-sky-800 to-cyan-900 p-4">
+              <div className="border-b border-sky-300/40 pb-3 text-center">
+                <p className="text-lg font-medium text-sky-50">Home</p>
+              </div>
+              <div className="mt-5 grid grid-cols-3 gap-3">
+                {phoneApps.map((app) => (
+                  <div
+                    key={app}
+                    className="flex h-16 items-center justify-center rounded-xl border border-white/30 bg-white/20 px-1 text-center text-[11px] font-semibold text-white"
+                  >
+                    {app}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ))}
+        </main>
+      </div>
     </div>
   );
 }

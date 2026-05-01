@@ -37,6 +37,15 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!existing) {
     return NextResponse.json({ error: "Session not found" }, { status: 404 });
   }
+  if (existing.status === "processing") {
+    return NextResponse.json(
+      {
+        error:
+          "A detection flow is already running for this session. Wait for it to finish.",
+      },
+      { status: 409 },
+    );
+  }
 
   const { error: procErr } = await supabase
     .from("sessions")
