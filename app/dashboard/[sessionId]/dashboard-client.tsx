@@ -45,8 +45,8 @@ export function DashboardClient({ sessionId }: Props) {
   const violenceButtonRef = useRef<HTMLButtonElement | null>(null);
   const runSimulationButtonRef = useRef<HTMLButtonElement | null>(null);
   const qrButtonRef = useRef<HTMLButtonElement | null>(null);
-  const sessionStatusRef = useRef<HTMLElement | null>(null);
-  const transcriptPanelRef = useRef<HTMLElement | null>(null);
+  const sessionStatusRef = useRef<HTMLDivElement | null>(null);
+  const transcriptPanelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     recordSessionVisit(sessionId);
