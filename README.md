@@ -1,56 +1,73 @@
-# Shrike — CCTV incident drill
+# Shrike
 
-Welcome. This repo is a **session-based demo** of prison-style CCTV triage: one upload block, one operator dashboard, one guard handset, and a full paper trail of what happened.
+Shrike is a session-based CCTV incident triage demo. It models how an operator can quickly hand off a likely violent incident to a guard, while preserving a complete event trail for review.
 
-## Why it exists
+This project is a triage workflow simulation only. It is not intended as a legal, disciplinary, or evidence-management system.
 
-Control rooms cannot watch every feed at once. Shrike explores **faster handoff** from a likely violent clip to a guard who can answer, decline, or connect — with state and transcripts persisted for review. It is a **triage drill**, not a legal or disciplinary system.
+## Overview
 
-## What you will see
+The app includes three core experiences:
 
-1. **Home** — create a new session in one click.
-2. **Dashboard** (`/dashboard/[sessionId]`) — guard deep link, session status, Roboflow detection controls (upload, camera, stream URL) plus a simulation fallback toggle.
-3. **Guard** (`/guard/[sessionId]`) — idle → ringing → answer or dismiss → connected / end, with optional voice via Vapi.
+1. **Home** - Create a new drill session.
+2. **Operator Dashboard** (`/dashboard/[sessionId]`) - View session status, share the guard deep link, and run detection using upload, camera, or stream URL (with a simulation fallback).
+3. **Guard Handset** (`/guard/[sessionId]`) - Handle call states (idle, ringing, answered, dismissed, connected, ended) with optional Vapi voice.
 
-Each session is independent: its own row in Postgres, events log, and URLs.
+Each session is isolated and tracked independently in Postgres with its own URLs and event history.
 
-## Quick start
+## Architecture at a Glance
 
-**Requirements:** Node.js 20+ recommended, npm (or compatible package manager).
+- **Frontend and API:** Next.js App Router
+- **Data store:** Supabase Postgres (`sessions`, `session_events`)
+- **Voice path:** Vapi (`@vapi-ai/web`)
+- **Detection path:** Roboflow (`/api/sessions/[sessionId]/detect`) with simulation fallback
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 20+
+- npm (or compatible package manager)
+
+### Installation
 
 ```bash
 npm install
 cp .env.local.example .env.local
 ```
 
-Edit **`.env.local`** (never commit it; it is gitignored):
+### Environment Variables
 
-| Area | Variables |
-|------|-----------|
-| **Supabase** | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — from [Project Settings → API](https://supabase.com/dashboard). Apply `supabase/schema.sql` to your project if tables are not created yet. |
-| **Vapi** | `NEXT_PUBLIC_VAPI_PUBLIC_KEY`, `NEXT_PUBLIC_VAPI_ASSISTANT_ID` — from [Vapi dashboard](https://dashboard.vapi.ai); used in the browser for the guard line. |
-| **Roboflow** | `ROBOFLOW_API_KEY`, `ROBOFLOW_WORKFLOW_URL` — used by `/api/sessions/[sessionId]/detect` for primary detection flow. Optional webhook hardening: `ROBOFLOW_WEBHOOK_SECRET`. |
+Update `.env.local` (do not commit this file; it is gitignored):
+
+| Area | Required Variables | Notes |
+|------|--------------------|-------|
+| Supabase | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Create from [Supabase Project Settings -> API](https://supabase.com/dashboard). Apply `supabase/schema.sql` if tables are missing. |
+| Vapi | `NEXT_PUBLIC_VAPI_PUBLIC_KEY`, `NEXT_PUBLIC_VAPI_ASSISTANT_ID` | Create in the [Vapi dashboard](https://dashboard.vapi.ai). Used by the guard voice client. |
+| Roboflow | `ROBOFLOW_API_KEY`, `ROBOFLOW_WORKFLOW_URL` | Used by `/api/sessions/[sessionId]/detect`. Optional hardening: `ROBOFLOW_WEBHOOK_SECRET`. |
+
+### Run Locally
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000), start a session, open the guard URL from the dashboard, then run either Roboflow detection or simulation fallback.
+Then open [http://localhost:3000](http://localhost:3000), create a session, open the guard URL from the dashboard, and run either Roboflow detection or simulation mode.
 
-## Session model (high level)
+## Session Lifecycle
 
-- **Created** → waiting for guard / processing → **incident_detected** or **no_incident** → **ringing** or **not_rung** → **connected** / resolved paths as implemented in API and UI.
-- State and important transitions are stored in **Supabase**; the app may use polling today with Realtime as a natural next step (see journal).
+At a high level, session flow follows:
 
-## Stack
+`created -> processing/waiting_for_guard -> incident_detected | no_incident -> ringing | not_rung -> connected / resolved`
 
-- **Next.js** (App Router) — pages and API routes.
-- **Supabase** — Postgres (`sessions`, `session_events`), future Storage/Realtime as needed.
-- **Vapi** — `@vapi-ai/web` on the guard page.
-- **Roboflow** — primary detector path (`/detect`) with simulation retained as explicit fallback.
+State transitions and event logs are persisted in Supabase.
 
-## Docs and continuity
+## Operational Notes
 
-- **`ENGINEERING_PROGRESS_JOURNAL.md`** — what is built, what is next, and a short session log for handoffs.
+- Polling is currently used in parts of the UI flow.
+- Supabase Realtime is a natural next step for reducing polling latency.
 
-If you pick this up in a new editor session, read this README and the journal first, then run from **Quick start** with a fresh `.env.local`.
+## Project Continuity
+
+- `ENGINEERING_PROGRESS_JOURNAL.md` tracks implementation history, pending work, and handoff notes.
+
+If you are resuming work in a new session, read this README and the journal first, then start with a fresh `.env.local`.
