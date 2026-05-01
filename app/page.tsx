@@ -40,9 +40,9 @@ export default function Home() {
             CCTV incident drill
           </h1>
           <p className="text-sm leading-relaxed text-zinc-600 dark:text-zinc-400">
-            Start a session, open the guard link, then use the dashboard toggle
-            to simulate violence or no violence and walk the full path
-            (Supabase session state + guard Vapi line).
+            Start a session, open the guard link on a second screen or device,
+            then use the dashboard to simulate an incident or a clear feed and
+            walk the full alert path end to end.
           </p>
         </div>
 
@@ -58,14 +58,6 @@ export default function Home() {
         {error && (
           <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
-
-        <p className="text-xs text-zinc-500">
-          Configure{" "}
-          <code className="rounded bg-zinc-200 px-1 py-0.5 font-mono dark:bg-zinc-800">
-            .env.local
-          </code>{" "}
-          with Supabase and Vapi keys (see project README).
-        </p>
       </main>
     </div>
   );

@@ -29,7 +29,10 @@ export function DashboardClient({ sessionId }: Props) {
   }, [sessionId]);
 
   useEffect(() => {
-    void refresh().finally(() => setLoading(false));
+    const id = setTimeout(() => {
+      void refresh().finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(id);
   }, [refresh]);
 
   useEffect(() => {

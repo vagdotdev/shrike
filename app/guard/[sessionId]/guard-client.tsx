@@ -30,7 +30,6 @@ export function GuardClient({ sessionId }: Props) {
   const ringtoneIndexRef = useRef(0);
   const ringtoneAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceCallActiveRef = useRef(false);
-  voiceCallActiveRef.current = voiceCallActive;
 
   const refresh = useCallback(async () => {
     const res = await fetch(`/api/sessions/${sessionId}`);
@@ -45,7 +44,14 @@ export function GuardClient({ sessionId }: Props) {
   }, [sessionId]);
 
   useEffect(() => {
-    void refresh().finally(() => setLoading(false));
+    voiceCallActiveRef.current = voiceCallActive;
+  }, [voiceCallActive]);
+
+  useEffect(() => {
+    const id = setTimeout(() => {
+      void refresh().finally(() => setLoading(false));
+    }, 0);
+    return () => clearTimeout(id);
   }, [refresh]);
 
   useEffect(() => {
@@ -58,7 +64,10 @@ export function GuardClient({ sessionId }: Props) {
   const ringing = serverRinging && !dismissIncoming;
 
   useEffect(() => {
-    if (!serverRinging) setDismissIncoming(false);
+    if (!serverRinging) {
+      const id = setTimeout(() => setDismissIncoming(false), 0);
+      return () => clearTimeout(id);
+    }
   }, [serverRinging]);
 
   const endGuardCall = useCallback(async () => {

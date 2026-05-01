@@ -1,76 +1,56 @@
-# AI Prison CCTV Incident Monitoring Demo
+# Shrike — CCTV incident drill
 
-## What This Is
+Welcome. This repo is a **session-based demo** of prison-style CCTV triage: one upload block, one operator dashboard, one guard handset, and a full paper trail of what happened.
 
-A session-based demo that:
+## Why it exists
 
-- processes uploaded prison CCTV-style video
-- detects likely inmate-on-inmate violence
-- alerts a guard through a phone-like page
-- logs the full event lifecycle
+Control rooms cannot watch every feed at once. Shrike explores **faster handoff** from a likely violent clip to a guard who can answer, decline, or connect — with state and transcripts persisted for review. It is a **triage drill**, not a legal or disciplinary system.
 
-Each run is one session with one video, one block/camera, and one guard page.
+## What you will see
 
-## Why This Exists
+1. **Home** — create a new session in one click.
+2. **Dashboard** (`/dashboard/[sessionId]`) — guard deep link, session status, simulation control (violence vs no incident while the vision path is still stubbed).
+3. **Guard** (`/guard/[sessionId]`) — idle → ringing → answer or dismiss → connected / end, with optional voice via Vapi.
 
-Operators cannot reliably watch many feeds at once.  
-This project exists to shorten response time for likely violent incidents.
+Each session is independent: its own row in Postgres, events log, and URLs.
 
-It is a triage system, not a legal decision system.
+## Quick start
 
-## Session Model
+**Requirements:** Node.js 20+ recommended, npm (or compatible package manager).
 
-When a session is created, generate:
+```bash
+npm install
+cp .env.local.example .env.local
+```
 
-- `dashboard/[sessionId]`
-- `guard/[sessionId]`
+Edit **`.env.local`** (never commit it; it is gitignored):
 
-Dashboard: upload video, track processing, review outcome.  
-Guard page: idle -> ringing -> answer/decline -> connected/end.
+| Area | Variables |
+|------|-----------|
+| **Supabase** | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` — from [Project Settings → API](https://supabase.com/dashboard). Apply `supabase/schema.sql` to your project if tables are not created yet. |
+| **Vapi** | `NEXT_PUBLIC_VAPI_PUBLIC_KEY`, `NEXT_PUBLIC_VAPI_ASSISTANT_ID` — from [Vapi dashboard](https://dashboard.vapi.ai); used in the browser for the guard line. |
+| **Roboflow** (optional for now) | `ROBOFLOW_API_KEY`, `ROBOFLOW_WORKFLOW_URL` — wired for a future real pipeline; simulation still drives most flows today. |
 
-## Core Flow
+```bash
+npm run dev
+```
 
-1. Create session.
-2. Open guard link.
-3. Upload video.
-4. Send video to Roboflow.
-5. Evaluate detection result.
-6. If threshold met: set `incident_detected` + `ringing` and trigger Vapi.
-7. Else: set `no_incident` + `not_rung`.
-8. Save all updates in Supabase and stream live status via Realtime.
+Open [http://localhost:3000](http://localhost:3000), start a session, open the guard URL from the dashboard, then exercise the simulation toggle.
 
-## Session States
+## Session model (high level)
 
-- `created`
-- `waiting_for_guard`
-- `processing`
-- `incident_detected` or `no_incident`
-- `ringing` or `not_rung`
-- `connected`
-- `resolved`
+- **Created** → waiting for guard / processing → **incident_detected** or **no_incident** → **ringing** or **not_rung** → **connected** / resolved paths as implemented in API and UI.
+- State and important transitions are stored in **Supabase**; the app may use polling today with Realtime as a natural next step (see journal).
 
 ## Stack
 
-- Next.js: dashboard, guard page, history, API routes
-- Supabase Postgres: session data and logs
-- Supabase Realtime: live updates
-- Supabase Storage or S3: uploaded videos/artifacts
-- Roboflow Workflows / Inference API: vision pipeline
-- Vapi Web SDK: guard call experience
+- **Next.js** (App Router) — pages and API routes.
+- **Supabase** — Postgres (`sessions`, `session_events`), future Storage/Realtime as needed.
+- **Vapi** — `@vapi-ai/web` on the guard page.
+- **Roboflow** — env placeholders for workflow/inference when the real detector replaces or gates simulation.
 
-## V1 Detection Scope
+## Docs and continuity
 
-Only detect likely inmate assault using:
+- **`ENGINEERING_PROGRESS_JOURNAL.md`** — what is built, what is next, and a short session log for handoffs.
 
-- person detection
-- tracking over time
-- violence confidence over a short window
-- sustained close interaction between at least two people
-
-## Continuity
-
-If work resumes in a new editor session:
-
-1. Read `README.md`.
-2. Read `ENGINEERING_PROGRESS_JOURNAL.md`.
-
+If you pick this up in a new editor session, read this README and the journal first, then run from **Quick start** with a fresh `.env.local`.
